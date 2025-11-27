@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>互動式評估報告：拖拉配對遊戲</title>
+    
+    <!-- 1. 引入 Tailwind CSS (樣式) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. 設定 Tailwind 字體與動畫 -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              handwriting: ['Caveat', 'cursive'],
+            },
+            animation: {
+              'bounce-slight': 'bounce-slight 0.5s infinite',
+              'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'shake': 'shake 0.5s cubic-bezier(.36,.07,.19,.97) both',
+            },
+            keyframes: {
+              'bounce-slight': {
+                '0%, 100%': { transform: 'translateY(-2%)' },
+                '50%': { transform: 'translateY(0)' },
+              },
+              'shake': {
+                '10%, 90%': { transform: 'translate3d(-1px, 0, 0)' },
+                '20%, 80%': { transform: 'translate3d(2px, 0, 0)' },
+                '30%, 50%, 70%': { transform: 'translate3d(-4px, 0, 0)' },
+                '40%, 60%': { transform: 'translate3d(4px, 0, 0)' }
+              }
+            }
+          }
+        }
+      }
+    </script>
+
+    <!-- 3. 引入 Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <!-- 4. 引入 Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 5. 設定 Import Map -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "canvas-confetti": "https://esm.sh/canvas-confetti@1.6.0"
+      }
+    }
+    </script>
+    
+    <style>
+      /* 自定義拖拉時的樣式 */
+      .dragging {
+        opacity: 0.5;
+        cursor: grabbing;
+      }
+      .drag-over {
+        background-color: #eff6ff; /* blue-50 */
+        border-color: #3b82f6; /* blue-500 */
+        transform: scale(1.02);
+      }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { BarChart, MessageSquare, StickyNote, ThumbsUp, Wifi, Bell, ArrowRight, CheckCircle2, XCircle, Trophy, RefreshCcw, MousePointerClick, Grab } from 'lucide-react';
+        import confetti from 'canvas-confetti';
+
+        const App = () => {
+          // --- Game State ---
+          const [selectedReportId, setSelectedReportId] = useState(null); // 目前選中的右側文字 ID (點擊模式)
+          const [draggedId, setDraggedId] = useState(null); // 目前正在拖拉的 ID (拖拉模式)
+          const [matchedIds, setMatchedIds] = useState([]); // 已經配對成功的 IDs
+          const [wrongAttempt, setWrongAttempt] = useState(null); // 錯誤嘗試的 ID (用於震動效果)
+          const [feedback, setFeedback] = useState("請將右側螢光筆文字「拖拉」到左側對應的圖表！"); // 遊戲提示訊息
+          const [dragOverTarget, setDragOverTarget] = useState(null); // 當前拖拉懸停的目標 ID
+          
+          // 所有需要配對的 ID 列表
+          const allIds = [
+            "q1-very-accurate", "q1-not-accurate", "q2-efficiency",
+            "chat-student-a", "chat-student-b", "chat-student-c",
+            "note-accuracy-efficiency", "note-conclusion", "note-rollout"
+          ];
+
+          const isGameComplete = matchedIds.length === allIds.length;
+          const progress = Math.round((matchedIds.length / allIds.length) * 100);
+
+          // 勝利效果
+          useEffect(() => {
+            if (isGameComplete) {
+              setFeedback("🎉 恭喜！你已完成所有配對！");
+              confetti({
+                particleCount: 150,
+                spread: 70,
+                origin: { y: 0.6 }
+              });
+            }
+          }, [isGameComplete]);
+
+          // --- Click Handlers (Fallback) ---
+
+          const handleReportClick = (id) => {
+            if (matchedIds.includes(id)) return;
+            setSelectedReportId(id);
+            setWrongAttempt(null);
+            setFeedback("已選取文字，請點擊左側對應數據...");
+          };
+
+          const handleSourceClick = (id) => {
+            if (matchedIds.includes(id)) return;
+            if (!selectedReportId) return; // 點擊模式下，如果沒選文字就不做反應 (或可以提示)
+
+            checkMatch(selectedReportId, id);
+          };
+
+          // --- Drag & Drop Handlers ---
+
+          const handleDragStart = (e, id) => {
+            if (matchedIds.includes(id)) {
+                e.preventDefault();
+                return;
+            }
+            setDraggedId(id);
+            // 設定拖拉數據，某些瀏覽器需要
+            e.dataTransfer.setData("text/plain", id);
+            e.dataTransfer.effectAllowed = "link";
+            setFeedback("正在拖拉... 請放開到左側正確的數據卡片上");
+          };
+
+          const handleDragOver = (e, targetId) => {
+            e.preventDefault(); // 必要：允許 Drop
+            if (matchedIds.includes(targetId)) return;
+            setDragOverTarget(targetId);
+          };
+
+          const handleDragLeave = (e) => {
+            // 簡單處理，離開時清除高亮
+             setDragOverTarget(null);
+          };
+
+          const handleDrop = (e, targetId) => {
+            e.preventDefault();
+            setDragOverTarget(null);
+            const sourceId = draggedId;
+            setDraggedId(null); // 拖拉結束
+
+            if (!sourceId) return;
+
+            checkMatch(sourceId, targetId);
+          };
+
+          const handleDragEnd = () => {
+            setDraggedId(null);
+            setDragOverTarget(null);
+            if (!wrongAttempt && !matchedIds.length) {
+                setFeedback("請將右側螢光筆文字「拖拉」到左側對應的圖表！");
+            }
+          };
+
+          // --- Core Logic ---
+
+          const checkMatch = (sourceId, targetId) => {
+            if (sourceId === targetId) {
+              // Bingo!
+              setMatchedIds(prev => [...prev, sourceId]);
+              setSelectedReportId(null);
+              setFeedback("✅ 配對成功！");
+            } else {
+              // Wrong
+              setWrongAttempt(targetId);
+              setFeedback("❌ 配對錯誤！試試看其他的？");
+              setTimeout(() => setWrongAttempt(null), 600);
+            }
+          };
+
+          const resetGame = () => {
+            setMatchedIds([]);
+            setSelectedReportId(null);
+            setFeedback("遊戲已重置，請開始拖拉配對！");
+          };
+
+          // --- Components ---
+
+          const InteractiveText = ({ id, children }) => {
+            const isMatched = matchedIds.includes(id);
+            const isSelected = selectedReportId === id;
+            const isBeingDragged = draggedId === id;
+            
+            let baseClasses = "px-1 rounded transition-all duration-200 border-b-2 inline-block ";
+            
+            if (isMatched) {
+              baseClasses += "bg-green-100 text-green-800 border-green-400 opacity-80 cursor-default ";
+            } else {
+              baseClasses += "cursor-grab active:cursor-grabbing "; // 拖拉游標
+              if (isSelected || isBeingDragged) {
+                baseClasses += "bg-blue-200 text-blue-900 border-blue-500 font-bold shadow-md scale-105 ";
+              } else {
+                baseClasses += "bg-slate-100 text-slate-600 border-slate-300 hover:bg-yellow-100 hover:border-yellow-400 hover:text-slate-900 ";
+              }
+            }
+
+            return (
+              <span
+                draggable={!isMatched}
+                onDragStart={(e) => handleDragStart(e, id)}
+                onDragEnd={handleDragEnd}
+                onClick={() => handleReportClick(id)}
+                className={baseClasses}
+              >
+                {children}
+                {isMatched && <CheckCircle2 size={12} className="inline ml-1 text-green-600 mb-0.5"/>}
+              </span>
+            );
+          };
+
+          const SourceBlock = ({ id, children, className = "" }) => {
+            const isMatched = matchedIds.includes(id);
+            const isWrong = wrongAttempt === id;
+            // 當正在拖拉任何東西，且這個格子還沒配對時，顯示為「可放置區域」
+            const isPotentialTarget = draggedId && !isMatched; 
+            const isHovered = dragOverTarget === id;
+            
+            let containerClass = `transition-all duration-300 transform rounded-lg p-1 md:p-2 border-2 relative select-none `;
+            
+            if (isMatched) {
+              containerClass += "border-green-400 bg-green-50 opacity-60 grayscale-[0.3] ";
+            } else if (isWrong) {
+              containerClass += "border-red-500 bg-red-50 animate-shake ";
+            } else if (isHovered) {
+              containerClass += "border-blue-500 bg-blue-50 scale-105 shadow-xl z-10 ";
+            } else if (isPotentialTarget) {
+               // 拖拉時的視覺提示
+               containerClass += "border-blue-300 border-dashed bg-white shadow-inner ";
+            } else if (selectedReportId && !isMatched) {
+               // 點擊模式下的提示
+               containerClass += "cursor-pointer border-blue-200 border-dashed hover:border-blue-400 hover:bg-blue-50 ";
+            } else {
+              containerClass += "border-transparent bg-transparent ";
+            }
+
+            return (
+              <div
+                onDragOver={(e) => handleDragOver(e, id)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, id)}
+                onClick={() => handleSourceClick(id)}
+                className={`${containerClass} ${className}`}
+              >
+                {isMatched && (
+                   <div className="absolute -top-1 -right-1 md:-top-2 md:-right-2 bg-green-500 text-white rounded-full p-0.5 z-20 shadow">
+                      <CheckCircle2 size={12} className="md:w-4 md:h-4" />
+                   </div>
+                )}
+                {children}
+                
+                {/* 拖拉時的 Drop 提示遮罩 */}
+                {isPotentialTarget && !isHovered && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-0 hover:opacity-100 transition-opacity">
+                        <span className="bg-blue-100 text-blue-600 text-[10px] md:text-xs px-2 py-1 rounded-full font-bold opacity-50">放這裡</span>
+                    </div>
+                )}
+              </div>
+            );
+          };
+
+          return (
+            <div className="min-h-screen flex flex-col font-sans bg-gray-100 select-none">
+              
+              {/* --- Header / Status Bar --- */}
+              <div className="sticky top-0 z-50 bg-white border-b border-slate-200 shadow-sm px-2 py-2 md:px-4 md:py-3 flex items-center justify-between">
+                <div className="flex items-center gap-2 md:gap-4">
+                    <div className="flex flex-col">
+                        <h1 className="text-sm md:text-lg font-bold text-slate-800 flex items-center gap-1 md:gap-2">
+                           <Trophy className="text-yellow-500 w-4 h-4 md:w-5 md:h-5" />
+                           配對挑戰
+                        </h1>
+                        <p className={`text-[10px] md:text-xs font-bold ${feedback.includes("❌") ? "text-red-500" : feedback.includes("✅") ? "text-green-600" : "text-blue-600"}`}>
+                            {feedback}
+                        </p>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2 md:gap-4">
+                    <div className="hidden md:flex flex-col items-end mr-4">
+                        <span className="text-xs text-slate-500 uppercase tracking-wider">Progress</span>
+                        <div className="w-32 h-2 bg-gray-200 rounded-full mt-1 overflow-hidden">
+                            <div 
+                                className="h-full bg-blue-500 transition-all duration-500 ease-out"
+                                style={{ width: `${progress}%` }}
+                            ></div>
+                        </div>
+                    </div>
+                    <div className="text-sm md:text-xl font-black text-slate-300">
+                        <span className="text-blue-600">{matchedIds.length}</span>/{allIds.length}
+                    </div>
+                    <button 
+                        onClick={resetGame}
+                        className="p-1 md:p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors"
+                        title="重置遊戲"
+                    >
+                        <RefreshCcw size={16} className="md:w-[18px] md:h-[18px]" />
+                    </button>
+                </div>
+              </div>
+
+              {/* Grid 佈局：將 col-span 固定為 5 和 7，確保手機版左右並排 */}
+              <div className="flex-grow p-1 md:p-8 max-w-7xl mx-auto w-full grid grid-cols-12 gap-2 md:gap-6">
+                
+                {/* --- LEFT COLUMN: DATA SOURCES (Drop Targets) --- */}
+                <div className="col-span-5 space-y-2 md:space-y-6 pb-20 md:pb-0">
+                  <div className="flex items-center justify-between">
+                     <h2 className="text-xs md:text-xl font-bold text-blue-800 border-l-4 border-blue-600 pl-2 md:pl-3">
+                       Data
+                     </h2>
+                  </div>
+
+                  {/* 1. Survey Results */}
+                  <div className="bg-white p-2 md:p-4 rounded-lg md:rounded-xl shadow-sm border border-slate-200">
+                    <h3 className="text-xs md:text-lg font-bold mb-2 md:mb-4 flex items-center text-slate-700">
+                      <span className="text-blue-600 font-black mr-1 md:mr-2">1.</span> Survey
+                    </h3>
+
+                    {/* Q1 Accuracy */}
+                    <div className="mb-2 md:mb-6">
+                      <h4 className="font-semibold text-[10px] md:text-sm text-slate-600 mb-1 md:mb-2 truncate">Q1. Accuracy</h4>
+                      
+                      <SourceBlock id="q1-very-accurate">
+                        <div className="flex justify-between text-[10px] md:text-xs mb-1">
+                          <span className="truncate">V.Accurate</span>
+                          <span className="text-blue-600 font-bold hidden xl:inline">Hero</span>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center text-[9px] md:text-xs">
+                            <span className="w-4 md:w-8 text-gray-400">Pre</span>
+                            <div className="w-full bg-gray-200 h-1.5 md:h-2 rounded-full overflow-hidden">
+                              <div className="bg-gray-400 h-full" style={{ width: '15%' }}></div>
+                            </div>
+                            <span className="w-5 md:w-8 text-right">15%</span>
+                          </div>
+                          <div className="flex items-center text-[9px] md:text-xs font-bold">
+                            <span className="w-4 md:w-8 text-blue-600">Post</span>
+                            <div className="w-full bg-blue-100 h-1.5 md:h-2 rounded-full overflow-hidden">
+                              <div className="bg-blue-600 h-full" style={{ width: '85%' }}></div>
+                            </div>
+                            <span className="w-5 md:w-8 text-right text-blue-600">85%</span>
+                          </div>
+                        </div>
+                      </SourceBlock>
+
+                      <SourceBlock id="q1-not-accurate" className="mt-1 md:mt-2">
+                        <div className="flex justify-between text-[10px] md:text-xs mb-1">
+                          <span className="truncate">Not Acc.</span>
+                          <span className="text-red-500 font-bold hidden xl:inline">Drop</span>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center text-[9px] md:text-xs">
+                            <span className="w-4 md:w-8 text-gray-400">Pre</span>
+                            <div className="w-full bg-gray-200 h-1.5 md:h-2 rounded-full overflow-hidden">
+                              <div className="bg-slate-500 h-full" style={{ width: '70%' }}></div>
+                            </div>
+                            <span className="w-5 md:w-8 text-right">70%</span>
+                          </div>
+                          <div className="flex items-center text-[9px] md:text-xs font-bold">
+                            <span className="w-4 md:w-8 text-blue-600">Post</span>
+                            <div className="w-full bg-blue-100 h-1.5 md:h-2 rounded-full overflow-hidden">
+                              <div className="bg-blue-300 h-full" style={{ width: '5%' }}></div>
+                            </div>
+                            <span className="w-5 md:w-8 text-right text-blue-600">5%</span>
+                          </div>
+                        </div>
+                      </SourceBlock>
+                    </div>
+
+                    {/* Q2 Efficiency */}
+                    <div>
+                      <h4 className="font-semibold text-[10px] md:text-sm text-slate-600 mb-1 md:mb-2 truncate">Q2. Efficiency</h4>
+                      <SourceBlock id="q2-efficiency">
+                        <div className="flex justify-between text-[10px] md:text-xs mb-1">
+                          <span className="truncate">Efficient</span>
+                          <span className="text-blue-500 font-bold hidden xl:inline">Jump</span>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center text-[9px] md:text-xs">
+                            <span className="w-4 md:w-8 text-gray-400">Pre</span>
+                            <div className="w-full bg-gray-200 h-1.5 md:h-2 rounded-full overflow-hidden">
+                              <div className="bg-gray-400 h-full" style={{ width: '10%' }}></div>
+                            </div>
+                            <span className="w-5 md:w-8 text-right">10%</span>
+                          </div>
+                          <div className="flex items-center text-[9px] md:text-xs font-bold">
+                            <span className="w-4 md:w-8 text-blue-600">Post</span>
+                            <div className="w-full bg-blue-100 h-1.5 md:h-2 rounded-full overflow-hidden">
+                              <div className="bg-blue-600 h-full" style={{ width: '65%' }}></div>
+                            </div>
+                            <span className="w-5 md:w-8 text-right text-blue-600">65%</span>
+                          </div>
+                        </div>
+                      </SourceBlock>
+                    </div>
+                  </div>
+
+                  {/* 2. Chat Logs */}
+                  <div className="bg-white p-2 md:p-4 rounded-lg md:rounded-xl shadow-sm border border-slate-200">
+                    <h3 className="text-xs md:text-lg font-bold mb-2 md:mb-4 flex items-center text-slate-700">
+                      <span className="text-blue-600 font-black mr-1 md:mr-2">2.</span> Chat
+                    </h3>
+                    
+                    <div className="space-y-1 md:space-y-3">
+                      <SourceBlock id="chat-student-a">
+                        <div className="bg-green-50 p-1 md:p-3 rounded-md md:rounded-lg border border-green-100 flex gap-1 md:gap-3">
+                          <div className="mt-0.5 md:mt-1 flex-shrink-0"><ThumbsUp size={12} className="text-green-600 md:w-4 md:h-4" /></div>
+                          <div className="min-w-0">
+                            <div className="text-[9px] md:text-xs font-bold text-green-700 mb-0.5 md:mb-1">Student A:</div>
+                            <div className="text-[9px] md:text-sm text-green-900 font-medium leading-tight line-clamp-2 md:line-clamp-none">"Much faster... Clean interface."</div>
+                          </div>
+                        </div>
+                      </SourceBlock>
+
+                      <SourceBlock id="chat-student-b">
+                        <div className="bg-orange-50 p-1 md:p-3 rounded-md md:rounded-lg border border-orange-100 flex gap-1 md:gap-3">
+                          <div className="mt-0.5 md:mt-1 flex-shrink-0"><Wifi size={12} className="text-orange-500 md:w-4 md:h-4" /></div>
+                          <div className="min-w-0">
+                            <div className="text-[9px] md:text-xs font-bold text-orange-700 mb-0.5 md:mb-1">Student B:</div>
+                            <div className="text-[9px] md:text-sm text-orange-900 font-medium leading-tight line-clamp-2 md:line-clamp-none">"Crashes when Wi-Fi is weak..."</div>
+                          </div>
+                        </div>
+                      </SourceBlock>
+
+                      <SourceBlock id="chat-student-c">
+                        <div className="bg-red-50 p-1 md:p-3 rounded-md md:rounded-lg border border-red-100 flex gap-1 md:gap-3">
+                          <div className="mt-0.5 md:mt-1 flex-shrink-0"><Bell size={12} className="text-red-500 md:w-4 md:h-4" /></div>
+                          <div className="min-w-0">
+                            <div className="text-[9px] md:text-xs font-bold text-red-700 mb-0.5 md:mb-1">Student C:</div>
+                            <div className="text-[9px] md:text-sm text-red-900 font-medium leading-tight line-clamp-2 md:line-clamp-none">"Loud 'BEEP' is embarrassing!"</div>
+                          </div>
+                        </div>
+                      </SourceBlock>
+                    </div>
+                  </div>
+
+                  {/* 3. Your Notes */}
+                  <div className="bg-yellow-100 p-2 md:p-5 rounded-lg md:rounded-xl shadow-sm border border-yellow-200 relative overflow-hidden transform rotate-1">
+                    <div className="absolute top-0 left-0 w-full h-2 md:h-4 bg-yellow-200 opacity-50"></div>
+                    <h3 className="text-[10px] md:text-sm font-bold mb-1 md:mb-3 text-yellow-900 tracking-wider border-b-2 border-yellow-300 pb-1 flex justify-between">
+                        <span>NOTES</span>
+                        <StickyNote size={12} className="md:w-4 md:h-4" />
+                    </h3>
+                    
+                    <div className="space-y-1 md:space-y-4 font-handwriting text-yellow-900 text-[10px] md:text-lg italic leading-tight">
+                      <div>
+                        <strong className="block text-[8px] md:text-xs uppercase text-yellow-700 not-italic font-sans mb-0.5 md:mb-1">Discussion:</strong>
+                        <SourceBlock id="note-accuracy-efficiency">
+                          <ul className="list-disc pl-3 md:pl-4 space-y-0.5 md:space-y-1">
+                            <li>Pilot → Acc. & eff. ↑</li>
+                            <li className="hidden md:list-item">Real-time → Self-mgmt</li>
+                            <li className="hidden md:list-item">Digital → Reliable</li>
+                          </ul>
+                        </SourceBlock>
+                      </div>
+
+                      <div>
+                        <strong className="block text-[8px] md:text-xs uppercase text-yellow-700 not-italic font-sans mt-1 md:mt-3 mb-0.5 md:mb-1">Concl:</strong>
+                        <SourceBlock id="note-conclusion">
+                          <ul className="list-disc pl-3 md:pl-4">
+                            <li>Effective replacement</li>
+                          </ul>
+                        </SourceBlock>
+                      </div>
+
+                      <div>
+                        <strong className="block text-[8px] md:text-xs uppercase text-yellow-700 not-italic font-sans mt-1 md:mt-3 mb-0.5 md:mb-1">Recs:</strong>
+                        <ul className="list-disc pl-3 md:pl-4 space-y-1 md:space-y-2">
+                          <SourceBlock id="note-rollout"><li>Roll out next sem</li></SourceBlock>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* --- RIGHT COLUMN: EVALUATION REPORT (Draggables) --- */}
+                <div className="col-span-7">
+                  <div className="bg-white rounded-lg md:rounded-xl shadow-xl border border-slate-200 overflow-hidden sticky top-16 md:top-24">
+                    <div className="bg-slate-50 border-b border-slate-200 p-2 md:p-4 flex items-center justify-between">
+                      <div className="flex items-center gap-1 md:gap-2">
+                        <StickyNote className="text-blue-600 w-4 h-4 md:w-6 md:h-6" />
+                        <h2 className="font-bold text-xs md:text-lg text-slate-800">Report Draft</h2>
+                      </div>
+                      {!draggedId && !matchedIds.length && (
+                          <div className="text-[10px] md:text-xs flex items-center gap-1 text-blue-600 animate-bounce-slight font-bold">
+                              <Grab size={12} className="md:w-3.5 md:h-3.5" /> 
+                              <span className="hidden md:inline">按住文字拖拉至左側</span>
+                              <span className="md:hidden">拖拉文字</span>
+                          </div>
+                      )}
+                    </div>
+                    
+                    <div className="p-2 md:p-8 space-y-2 md:space-y-6 text-slate-700 leading-snug md:leading-relaxed text-[11px] md:text-lg h-[80vh] md:h-auto overflow-y-auto md:overflow-visible">
+                      
+                      {/* 3. FINDINGS */}
+                      <section>
+                        <h3 className="font-bold text-slate-900 mb-1 md:mb-2 uppercase tracking-wide text-[10px] md:text-sm border-b pb-1">3. Findings</h3>
+                        <p className="mb-2 md:mb-4 text-justify">
+                          <InteractiveText id="q1-very-accurate">
+                            Regarding accuracy, survey results revealed significant improvement. A majority of students reported attendance records were very accurate, compared to a figure of only 15% before the pilot project.
+                          </InteractiveText>{' '}
+                          <InteractiveText id="q1-not-accurate">
+                            Conversely, those indicating records were not accurate dropped drastically from 70% before the project to a negligible 5%, showing a successful resolution of previous inaccuracies.
+                          </InteractiveText>{' '}
+                          <InteractiveText id="q2-efficiency">
+                            Efficiency data is equally encouraging. The number of respondents considering the check-in process highly efficient rose sharply from 10% in the pre-pilot phase to 65% post-pilot.
+                          </InteractiveText>
+                        </p>
+                        <p className="mb-2 md:mb-4 text-justify">
+                          <InteractiveText id="chat-student-a">
+                            Chat logs further support these statistics. Student A commended the clean interface, noting the process was significantly faster than passing paper lists around.
+                          </InteractiveText>{' '}
+                          <InteractiveText id="chat-student-b">
+                            However, technical hurdles were highlighted. Student B noted experiencing app crashes when the campus Wi-Fi connection was weak, which prevented them from checking in.
+                          </InteractiveText>{' '}
+                          <InteractiveText id="chat-student-c">
+                            Furthermore, Student C complained that the loud notification sound was distracting and embarrassing during lectures.
+                          </InteractiveText>
+                        </p>
+                      </section>
+
+                      {/* 4. DISCUSSION */}
+                      <section>
+                        <h3 className="font-bold text-slate-900 mb-1 md:mb-2 uppercase tracking-wide text-[10px] md:text-sm border-b pb-1">4. Discussion</h3>
+                        <p className="mb-2 md:mb-4 text-justify">
+                          <InteractiveText id="note-accuracy-efficiency">
+                            The findings suggest that the pilot project has effectively improved both accuracy and efficiency compared to manual methods.
+                          </InteractiveText>{' '}
+                          <InteractiveText id="note-accuracy-efficiency">
+                            Through real-time data access, students have demonstrated better self-management capabilities.
+                          </InteractiveText>{' '}
+                          <InteractiveText id="note-accuracy-efficiency">
+                            In other words, the transition successfully enhanced reliability while providing an eco-friendly alternative to paper records.
+                          </InteractiveText>
+                        </p>
+                      </section>
+
+                      {/* 5. CONCLUSION */}
+                      <section>
+                        <h3 className="font-bold text-slate-900 mb-1 md:mb-2 uppercase tracking-wide text-[10px] md:text-sm border-b pb-1">5. Conclusion</h3>
+                        <p className="mb-2 md:mb-4 text-justify">
+                          <InteractiveText id="note-conclusion">
+                            In conclusion, findings indicate the project is a highly effective replacement for the manual system, supported by statistical evidence.
+                          </InteractiveText>{' '}
+                          <InteractiveText id="chat-student-b">
+                            While largely successful, there is clear room for improvement to ensure stability in all network conditions.
+                          </InteractiveText>
+                        </p>
+                      </section>
+
+                      {/* 6. RECOMMENDATIONS */}
+                      <section>
+                        <h3 className="font-bold text-slate-900 mb-1 md:mb-2 uppercase tracking-wide text-[10px] md:text-sm border-b pb-1">6. Recommendations</h3>
+                        <p className="mb-2 md:mb-4 text-justify">
+                          <InteractiveText id="note-rollout">
+                            In view of the positive findings, it is recommended that the app be officially rolled out to all departments next semester.
+                          </InteractiveText>
+                        </p>
+                        <p className="mb-2 md:mb-4 text-justify">
+                          <InteractiveText id="chat-student-b">
+                            To address technical concerns, adding an "Offline Mode" is advisable to resolve connectivity issues experienced in areas with weak Wi-Fi.
+                          </InteractiveText>{' '}
+                          <InteractiveText id="chat-student-c">
+                            Finally, to address noise feedback, a "Silent Mode" or mute option should be implemented to avoid disruption during classes.
+                          </InteractiveText>
+                        </p>
+                      </section>
+
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+              
+              {isGameComplete && (
+                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setFeedback("你太棒了！")}>
+                      <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md text-center transform scale-110 transition-transform">
+                          <Trophy size={64} className="mx-auto text-yellow-500 mb-4 animate-bounce" />
+                          <h2 className="text-3xl font-bold text-slate-800 mb-2">挑戰成功!</h2>
+                          <p className="text-slate-600 mb-6">你已經成功將所有報告內容與原始數據配對。</p>
+                          <button onClick={resetGame} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95">
+                             再次遊玩
+                          </button>
+                      </div>
+                  </div>
+              )}
+
+            </div>
+          );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
